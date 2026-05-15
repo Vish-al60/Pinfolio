@@ -608,18 +608,39 @@ board.addEventListener("pointerleave", () => {
 });
 
 function attachPinMotion(card) {
-  if (prefersLeanMotion) return;
+  if (prefersLeanMotion) {
+    card.addEventListener("pointerdown", () => {
+      card.classList.add("is-touch-lift");
+      window.setTimeout(() => card.classList.remove("is-touch-lift"), 260);
+    });
+    return;
+  }
+
+  let motionFrame = 0;
+  let nextTiltX = 0;
+  let nextTiltY = 0;
 
   card.addEventListener("pointermove", (event) => {
     const bounds = card.getBoundingClientRect();
     const x = (event.clientX - bounds.left) / bounds.width - 0.5;
     const y = (event.clientY - bounds.top) / bounds.height - 0.5;
 
-    card.style.setProperty("--tilt-x", `${y * -7}deg`);
-    card.style.setProperty("--tilt-y", `${x * 7}deg`);
+    nextTiltX = y * -4.5;
+    nextTiltY = x * 4.5;
+
+    if (motionFrame) return;
+    motionFrame = window.requestAnimationFrame(() => {
+      card.style.setProperty("--tilt-x", `${nextTiltX}deg`);
+      card.style.setProperty("--tilt-y", `${nextTiltY}deg`);
+      motionFrame = 0;
+    });
   });
 
   card.addEventListener("pointerleave", () => {
+    if (motionFrame) {
+      window.cancelAnimationFrame(motionFrame);
+      motionFrame = 0;
+    }
     card.style.setProperty("--tilt-x", "0deg");
     card.style.setProperty("--tilt-y", "0deg");
   });

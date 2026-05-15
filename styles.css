@@ -809,6 +809,7 @@ h2 {
   --lift: -6px;
   --pin-scale: 1.012;
   box-shadow: 0 24px 68px rgba(39, 25, 26, 0.26);
+  will-change: transform;
 }
 
 .pin-card::after {
@@ -2265,20 +2266,29 @@ h2 {
   .pin-card {
     --lift: 0px;
     --pin-scale: 1;
+    --tilt-x: 0deg;
+    --tilt-y: 0deg;
     margin-bottom: 12px;
     box-shadow: 0 8px 20px rgba(39, 25, 26, 0.11);
     content-visibility: auto;
     contain-intrinsic-size: 280px 420px;
-    transform: none;
-    transform-style: flat;
+    transform: perspective(700px) translateY(var(--lift)) scale(var(--pin-scale))
+      rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
+    transform-style: preserve-3d;
     animation-duration: 260ms;
-    transition: box-shadow 160ms ease;
+    transition:
+      box-shadow 160ms ease,
+      transform 180ms ease;
   }
 
-  .pin-card:hover {
-    --lift: 0px;
-    --pin-scale: 1;
-    box-shadow: 0 12px 26px rgba(39, 25, 26, 0.14);
+  .pin-card:hover,
+  .pin-card:active,
+  .pin-card.is-touch-lift {
+    --lift: -4px;
+    --pin-scale: 1.018;
+    --tilt-x: 1.2deg;
+    --tilt-y: -1.2deg;
+    box-shadow: 0 14px 30px rgba(39, 25, 26, 0.16);
   }
 
   .pin-card::after {
@@ -2288,8 +2298,13 @@ h2 {
   .pin-card img,
   .pin-card:hover img {
     filter: none;
-    transform: none;
-    transition: none;
+    transition: transform 180ms ease;
+  }
+
+  .pin-card:hover img,
+  .pin-card:active img,
+  .pin-card.is-touch-lift img {
+    transform: scale(1.025);
   }
 
   .pin-info {
