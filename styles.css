@@ -2139,8 +2139,33 @@ h2 {
 }
 
 @media (max-width: 680px) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  body::before,
+  .hero-media > img,
+  .hero-pin,
+  .hero-pin::after,
+  .drop-zone::before,
+  .drop-zone::after,
+  .upload-icon,
+  .brand-mark,
+  .auth-card,
+  .auth-preview-grid img {
+    animation: none;
+  }
+
+  .topbar,
+  .upload-composer,
+  .auth-card,
+  .board-section.has-hover-bg .masonry-board {
+    backdrop-filter: none;
+  }
+
   .topbar {
     gap: 10px;
+    background: rgba(255, 250, 247, 0.96);
   }
 
   .brand-copy small {
@@ -2155,6 +2180,12 @@ h2 {
   .hero-media {
     inset: 10px;
     border-radius: 18px;
+    box-shadow: 0 12px 34px rgba(39, 25, 26, 0.16);
+  }
+
+  .hero-media > img {
+    transform: none;
+    transition: opacity 220ms ease;
   }
 
   .hero-media::after {
@@ -2193,6 +2224,7 @@ h2 {
 
   .upload-composer {
     padding: 14px;
+    box-shadow: 0 14px 32px rgba(39, 25, 26, 0.1);
   }
 
   .composer-heading {
@@ -2210,15 +2242,54 @@ h2 {
 
   .drop-zone {
     min-height: 290px;
+    box-shadow: 0 14px 34px rgba(39, 25, 26, 0.1);
   }
 
   .masonry-board {
     column-count: 2;
     column-gap: 12px;
+    padding: 6px;
+  }
+
+  .board-section::before {
+    filter: saturate(1.08) contrast(1.02);
+    transform: none;
+    transition: opacity 180ms ease;
+  }
+
+  .board-section.has-hover-bg::before {
+    opacity: 0.46;
+    transform: none;
   }
 
   .pin-card {
+    --lift: 0px;
+    --pin-scale: 1;
     margin-bottom: 12px;
+    box-shadow: 0 8px 20px rgba(39, 25, 26, 0.11);
+    content-visibility: auto;
+    contain-intrinsic-size: 280px 420px;
+    transform: none;
+    transform-style: flat;
+    animation-duration: 260ms;
+    transition: box-shadow 160ms ease;
+  }
+
+  .pin-card:hover {
+    --lift: 0px;
+    --pin-scale: 1;
+    box-shadow: 0 12px 26px rgba(39, 25, 26, 0.14);
+  }
+
+  .pin-card::after {
+    display: none;
+  }
+
+  .pin-card img,
+  .pin-card:hover img {
+    filter: none;
+    transform: none;
+    transition: none;
   }
 
   .pin-info {
@@ -2294,6 +2365,8 @@ h2 {
     width: calc(100% - 20px);
     padding: 22px 20px;
     border-radius: 32px;
+    box-shadow: 0 18px 44px rgba(39, 25, 26, 0.12);
+    transform: none;
   }
 
   .auth-card h2 {

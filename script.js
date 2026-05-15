@@ -164,6 +164,7 @@ let categories = [...defaultCategories];
 let hoverBackgroundEnabled = false;
 let scrollTicking = false;
 let toastTimer = 0;
+const prefersLeanMotion = window.matchMedia("(max-width: 760px), (pointer: coarse)").matches;
 
 function normalizeUserName(name) {
   return name.trim().replace(/\s+/g, " ").slice(0, 28);
@@ -548,10 +549,15 @@ function renderPins() {
 
     image.src = pin.src;
     image.alt = pin.title;
+    image.loading = index < 2 ? "eager" : "lazy";
+    image.decoding = "async";
+    if (index < 2) {
+      image.fetchPriority = "high";
+    }
     title.textContent = pin.title;
     subtitle.textContent = pin.subtitle || getSubtitle(pin.category);
     card.dataset.category = pin.category;
-    card.style.animationDelay = `${Math.min(index * 55, 520)}ms`;
+    card.style.animationDelay = prefersLeanMotion ? "0ms" : `${Math.min(index * 55, 520)}ms`;
     attachPinMotion(card);
     card.addEventListener("pointerenter", () => setBoardHoverBackground(pin.src));
 
@@ -602,6 +608,8 @@ board.addEventListener("pointerleave", () => {
 });
 
 function attachPinMotion(card) {
+  if (prefersLeanMotion) return;
+
   card.addEventListener("pointermove", (event) => {
     const bounds = card.getBoundingClientRect();
     const x = (event.clientX - bounds.left) / bounds.width - 0.5;
@@ -853,7 +861,7 @@ shuffleButton.addEventListener("click", () => {
 });
 
 function updateHeroParallax() {
-  if (!hero) return;
+  if (!hero || prefersLeanMotion) return;
 
   const progress = Math.min(Math.max(window.scrollY / hero.offsetHeight, 0), 1);
   heroPins.forEach((pin, index) => {
@@ -865,16 +873,18 @@ function updateHeroParallax() {
   scrollTicking = false;
 }
 
-window.addEventListener(
-  "scroll",
-  () => {
-    if (!scrollTicking) {
-      window.requestAnimationFrame(updateHeroParallax);
-      scrollTicking = true;
-    }
-  },
-  { passive: true },
-);
+if (!prefersLeanMotion) {
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (!scrollTicking) {
+        window.requestAnimationFrame(updateHeroParallax);
+        scrollTicking = true;
+      }
+    },
+    { passive: true },
+  );
+}
 
 if ("IntersectionObserver" in window) {
   const revealObserver = new IntersectionObserver(
@@ -891,7 +901,7 @@ if ("IntersectionObserver" in window) {
 
   revealTargets.forEach((target, index) => {
     target.classList.add("reveal-on-scroll");
-    target.style.transitionDelay = `${Math.min(index * 70, 280)}ms`;
+    target.style.transitionDelay = prefersLeanMotion ? "0ms" : `${Math.min(index * 70, 280)}ms`;
     revealObserver.observe(target);
   });
 } else {
