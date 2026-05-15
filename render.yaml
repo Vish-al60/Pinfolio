@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: pinfolio
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: PINFOLIO_DB_MODE
+        value: supabase
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: FEEDBACK_TO_EMAIL
+        value: vish.chouhan60@gmail.com
+      - key: FEEDBACK_FROM_EMAIL
+        sync: false
