@@ -4,9 +4,11 @@ const template = document.querySelector("#pinTemplate");
 const input = document.querySelector("#photoInput");
 const dropZone = document.querySelector("#dropZone");
 const pinCount = document.querySelector("#pinCount");
+const likeCount = document.querySelector("#likeCount");
 const shuffleButton = document.querySelector("#shuffleButton");
 const filterRow = document.querySelector("#categoryFilters");
 const uploadCategorySelect = document.querySelector("#uploadCategorySelect");
+const uploadVisibilitySelect = document.querySelector("#uploadVisibilitySelect");
 const pinTitleInput = document.querySelector("#pinTitleInput");
 const pinSubtitleInput = document.querySelector("#pinSubtitleInput");
 const newCategoryInput = document.querySelector("#newCategoryInput");
@@ -49,14 +51,19 @@ const authTabs = [...document.querySelectorAll("[data-auth-mode]")];
 const authTitle = document.querySelector("#authTitle");
 const authIntro = document.querySelector("#authIntro");
 const authSubmitButton = document.querySelector("#authSubmitButton");
+const authSubmitLabel = authSubmitButton.querySelector(".button-label");
+const boardEyebrow = document.querySelector("#boardEyebrow");
+const boardTitle = document.querySelector("#boardTitle");
+const boardTabs = [...document.querySelectorAll("[data-board-mode]")];
 const heroPins = [...document.querySelectorAll(".hero-pin")];
 const revealTargets = [
-  ...document.querySelectorAll(".profile-band, .upload-band, .board-section, .stats div"),
+  ...document.querySelectorAll(".profile-band, .upload-band, .board-section, .stat-card"),
 ];
 const defaultHeroBackground = heroBackground.src;
 const currentUserStorageKey = "pinfolioCurrentUser";
 const authTokenStorageKey = "pinfolioAuthToken";
 const feedbackRecipientEmail = "vish.chouhan60@gmail.com";
+const isFilePreview = window.location.protocol === "file:";
 const defaultCategories = [
   { id: "style", label: "Style" },
   { id: "travel", label: "Travel" },
@@ -159,7 +166,9 @@ let currentUser = sessionStorage.getItem(currentUserStorageKey) || "";
 let authMode = "signin";
 let profileData = {};
 let pins = getDefaultPins();
+let publicPins = [];
 let activeFilter = "all";
+let boardMode = "mine";
 let categories = [...defaultCategories];
 let hoverBackgroundEnabled = false;
 let scrollTicking = false;
@@ -198,7 +207,14 @@ function showToast(title, message, type = "success") {
 }
 
 async function apiRequest(path, options = {}) {
+  if (isFilePreview) {
+    throw new Error("Open Pinfolio at http://localhost:3000/ to use login and signup.");
+  }
+
   const token = sessionStorage.getItem(authTokenStorageKey);
+  const timeoutMs = options.timeoutMs || 25000;
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers || {}),
@@ -206,17 +222,27 @@ async function apiRequest(path, options = {}) {
 
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(path, {
-    ...options,
-    headers,
-  });
+  try {
+    const response = await fetch(path, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
 
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || "Request failed");
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Request failed");
+    }
+
+    return data;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("Request is taking too long. Please try again.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
-
-  return data;
 }
 
 async function saveProfilePatch(patch) {
@@ -241,11 +267,22 @@ async function loadProfileFromServer() {
       ? profileData.categories
       : [...defaultCategories];
   hoverBackgroundEnabled = Boolean(profileData.settings?.hoverBackgroundEnabled);
+  boardMode = "mine";
   activeFilter = "all";
   loadSavedHeroBackground();
   syncGalleryEffectsUi();
   syncCategoryUi();
+  await loadPublicPins();
   renderPins();
+}
+
+async function loadPublicPins() {
+  try {
+    const result = await apiRequest("/api/public-pins");
+    publicPins = Array.isArray(result.pins) ? result.pins : [];
+  } catch {
+    publicPins = [];
+  }
 }
 
 function setAuthOpen(open) {
@@ -255,14 +292,31 @@ function setAuthOpen(open) {
   document.body.classList.toggle("app-locked", open);
 
   if (open) {
-    authMessage.classList.remove("error");
+    authMessage.classList.remove("error", "success");
     authMessage.textContent = "Privacy and encryption protocol";
+    setAuthFieldState(userNameInput, false);
+    setAuthFieldState(passwordInput, false);
     authOverlay.scrollTop = 0;
     const authShell = document.querySelector(".auth-shell");
     if (authShell) authShell.scrollTop = 0;
     window.scrollTo({ top: 0, behavior: "instant" });
     window.setTimeout(() => userNameInput.focus(), 160);
   }
+}
+
+function setAuthMessage(message, type = "") {
+  authMessage.classList.toggle("error", type === "error");
+  authMessage.classList.toggle("success", type === "success");
+  authMessage.textContent = message;
+}
+
+function setAuthLoading(isLoading) {
+  authSubmitButton.disabled = isLoading;
+  authSubmitButton.classList.toggle("is-loading", isLoading);
+}
+
+function setAuthFieldState(field, hasError) {
+  field.classList.toggle("field-error", hasError);
 }
 
 function logoutUser() {
@@ -277,7 +331,33 @@ function logoutUser() {
 
 async function loginUser(name, password) {
   const username = normalizeUserName(name);
-  if (!username || !password) return;
+  const hasMissingUsername = !username;
+  const hasMissingPassword = !password;
+
+  setAuthFieldState(userNameInput, hasMissingUsername);
+  setAuthFieldState(passwordInput, hasMissingPassword);
+
+  if (hasMissingUsername) {
+    setAuthMessage("Please enter your username.", "error");
+    userNameInput.focus();
+    return;
+  }
+
+  if (hasMissingPassword) {
+    setAuthMessage("Please enter your password.", "error");
+    passwordInput.focus();
+    return;
+  }
+
+  if (authMode === "signup" && password.length < 4) {
+    setAuthFieldState(passwordInput, true);
+    setAuthMessage("Password must be at least 4 characters.", "error");
+    passwordInput.focus();
+    return;
+  }
+
+  setAuthMessage(authMode === "signup" ? "Creating your account..." : "Checking your details...");
+  setAuthLoading(true);
 
   try {
     const result = await apiRequest(authMode === "signup" ? "/api/signup" : "/api/signin", {
@@ -289,15 +369,28 @@ async function loginUser(name, password) {
     sessionStorage.setItem(currentUserStorageKey, currentUser);
     sessionStorage.setItem(authTokenStorageKey, result.token);
     await loadProfileFromServer();
-    authMessage.classList.remove("error");
-    authMessage.textContent = authMode === "signup" ? "Account created." : "Login successful.";
+    setAuthFieldState(userNameInput, false);
+    setAuthFieldState(passwordInput, false);
+    setAuthMessage(authMode === "signup" ? "Account created." : "Login successful.", "success");
     passwordInput.value = "";
     setAuthOpen(false);
   } catch (error) {
-    authMessage.classList.add("error");
-    authMessage.textContent = error.message;
-    passwordInput.value = "";
-    passwordInput.focus();
+    const message = error.message || "Could not sign in.";
+    setAuthMessage(message, "error");
+
+    const lowerMessage = message.toLowerCase();
+    const isUsernameError = lowerMessage.includes("username") || lowerMessage.includes("account");
+    const isPasswordError = lowerMessage.includes("password");
+    setAuthFieldState(userNameInput, isUsernameError);
+    setAuthFieldState(passwordInput, isPasswordError);
+
+    if (isUsernameError) {
+      userNameInput.focus();
+    } else {
+      passwordInput.focus();
+    }
+  } finally {
+    setAuthLoading(false);
   }
 }
 
@@ -426,16 +519,16 @@ function slugifyCategory(label) {
 }
 
 function saveCategories() {
-  saveProfilePatch({ categories });
+  return saveProfilePatch({ categories });
 }
 
 function savePins() {
-  saveProfilePatch({ pins });
+  return saveProfilePatch({ pins });
 }
 
 function renderCategoryFilters() {
   filterRow.innerHTML = "";
-  const filters = [{ id: "all", label: "All" }, ...categories];
+  const filters = [{ id: "all", label: "All" }, ...getActiveCategories()];
 
   filters.forEach((category) => {
     const button = document.createElement("button");
@@ -446,6 +539,48 @@ function renderCategoryFilters() {
     button.classList.toggle("active", activeFilter === category.id);
     filterRow.append(button);
   });
+}
+
+function getActiveCategories() {
+  if (boardMode === "mine") return categories;
+
+  const categoryMap = new Map();
+  publicPins.forEach((pin) => {
+    const id = pin.category || "public";
+    const label = pin.categoryLabel || id;
+    if (!categoryMap.has(id)) categoryMap.set(id, { id, label });
+  });
+  return [...categoryMap.values()];
+}
+
+function syncBoardModeUi() {
+  boardTabs.forEach((button) => {
+    button.classList.toggle("active", button.dataset.boardMode === boardMode);
+  });
+
+  boardEyebrow.textContent = boardMode === "public" ? "Public feed" : "Private board";
+  boardTitle.textContent =
+    boardMode === "public" ? "Discover public Pinfolio photos" : "Your animated Pinterest portfolio";
+  shuffleButton.disabled = boardMode === "public";
+  shuffleButton.setAttribute(
+    "aria-label",
+    boardMode === "public" ? "Shuffle disabled on public feed" : "Shuffle gallery",
+  );
+}
+
+function formatStatNumber(value) {
+  if (value >= 1000000) return `${(value / 1000000).toFixed(value >= 10000000 ? 0 : 1)}m`;
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k`;
+  return String(value);
+}
+
+function getTotalPinLikes() {
+  return pins.reduce((total, pin) => total + (Array.isArray(pin.likedBy) ? pin.likedBy.length : Number(pin.likes || 0)), 0);
+}
+
+function updateProfileStats() {
+  pinCount.textContent = formatStatNumber(pins.length);
+  likeCount.textContent = formatStatNumber(getTotalPinLikes());
 }
 
 function renderUploadCategoryOptions() {
@@ -486,10 +621,11 @@ function syncCategoryUi() {
     categories = [...defaultCategories];
   }
 
-  if (activeFilter !== "all" && !categories.some((category) => category.id === activeFilter)) {
+  if (activeFilter !== "all" && !getActiveCategories().some((category) => category.id === activeFilter)) {
     activeFilter = "all";
   }
 
+  syncBoardModeUi();
   renderCategoryFilters();
   renderUploadCategoryOptions();
   renderCategoryList();
@@ -535,10 +671,26 @@ function deleteCategory(id) {
 }
 
 function renderPins() {
+  syncBoardModeUi();
+  renderCategoryFilters();
+
+  const sourcePins = boardMode === "public" ? publicPins : pins;
   const visiblePins =
-    activeFilter === "all" ? pins : pins.filter((pin) => pin.category === activeFilter);
+    activeFilter === "all" ? sourcePins : sourcePins.filter((pin) => pin.category === activeFilter);
 
   board.innerHTML = "";
+  if (!visiblePins.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-board";
+    empty.innerHTML =
+      boardMode === "public"
+        ? "<strong>No public pins yet</strong><span>Upload a photo as Public to start the community feed.</span>"
+        : "<strong>No pins here yet</strong><span>Upload photos or switch filters to see your saved board.</span>";
+    board.append(empty);
+    updateProfileStats();
+    return;
+  }
+
   visiblePins.forEach((pin, index) => {
     const card = template.content.firstElementChild.cloneNode(true);
     const image = card.querySelector("img");
@@ -546,6 +698,8 @@ function renderPins() {
     const subtitle = card.querySelector(".pin-info span");
     const saveButton = card.querySelector(".save-button");
     const removeButton = card.querySelector(".remove-pin");
+
+    const isPublicBoard = boardMode === "public";
 
     image.src = pin.src;
     image.alt = pin.title;
@@ -555,31 +709,76 @@ function renderPins() {
       image.fetchPriority = "high";
     }
     title.textContent = pin.title;
-    subtitle.textContent = pin.subtitle || getSubtitle(pin.category);
+    subtitle.textContent = isPublicBoard
+      ? `${pin.owner || "Creator"}${pin.subtitle ? ` - ${pin.subtitle}` : ""}`
+      : pin.subtitle || getSubtitle(pin.category);
     card.dataset.category = pin.category;
+    card.classList.toggle("public-pin", isPublicBoard);
     card.style.animationDelay = prefersLeanMotion ? "0ms" : `${Math.min(index * 55, 520)}ms`;
     attachPinMotion(card);
     card.addEventListener("pointerenter", () => setBoardHoverBackground(pin.src));
 
-    saveButton.addEventListener("click", () => {
+    if (isPublicBoard) {
+      removeButton.hidden = true;
+      saveButton.classList.add("like-button");
+      saveButton.setAttribute("aria-label", pin.liked ? "Unlike public photo" : "Like public photo");
+      saveButton.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20.8 4.6a5.4 5.4 0 0 0-7.6 0L12 5.8l-1.2-1.2a5.4 5.4 0 0 0-7.6 7.6L12 21l8.8-8.8a5.4 5.4 0 0 0 0-7.6Z" />
+        </svg>
+        <span>${pin.likes || 0}</span>
+      `;
+      saveButton.classList.toggle("liked", Boolean(pin.liked));
+      saveButton.addEventListener("click", () => likePublicPin(pin.id, saveButton));
+    } else {
+      saveButton.addEventListener("click", () => {
       pins = [pin, ...pins.filter((item) => item.id !== pin.id)];
       savePins();
       activeFilter = "all";
       setActiveFilter("all");
       renderPins();
       board.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+      });
+    }
 
-    removeButton.addEventListener("click", () => {
-      pins = pins.filter((item) => item.id !== pin.id);
-      savePins();
-      renderPins();
-    });
+    if (!isPublicBoard) {
+      removeButton.addEventListener("click", () => {
+        pins = pins.filter((item) => item.id !== pin.id);
+        savePins();
+        renderPins();
+      });
+    }
 
     board.append(card);
   });
 
-  pinCount.textContent = String(pins.length);
+  updateProfileStats();
+}
+
+async function likePublicPin(pinId, button) {
+  button.disabled = true;
+  try {
+    const result = await apiRequest("/api/public-pins/like", {
+      method: "POST",
+      body: JSON.stringify({ pinId }),
+    });
+
+    publicPins = publicPins.map((pin) =>
+      pin.id === pinId ? { ...pin, likes: result.likes, liked: result.liked } : pin,
+    );
+    pins = pins.map((pin) =>
+      pin.id === pinId ? { ...pin, likes: result.likes, liked: result.liked } : pin,
+    );
+    button.classList.toggle("liked", Boolean(result.liked));
+    button.setAttribute("aria-label", result.liked ? "Unlike public photo" : "Like public photo");
+    const count = button.querySelector("span");
+    if (count) count.textContent = String(result.likes);
+    updateProfileStats();
+  } catch (error) {
+    showToast("Like failed", error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function syncGalleryEffectsUi() {
@@ -649,6 +848,9 @@ function attachPinMotion(card) {
 async function addFiles(files) {
   const imageFiles = [...files].filter((file) => file.type.startsWith("image/"));
   const selectedCategory = uploadCategorySelect.value || categories[0]?.id || "style";
+  const selectedCategoryLabel =
+    categories.find((category) => category.id === selectedCategory)?.label || selectedCategory;
+  const visibility = uploadVisibilitySelect.value === "public" ? "public" : "private";
   const customTitle = pinTitleInput.value.trim();
   const customSubtitle = pinSubtitleInput.value.trim();
 
@@ -667,13 +869,21 @@ async function addFiles(files) {
               `Uploaded pin ${index + 1}`,
         subtitle: customSubtitle,
         category: selectedCategory,
+        categoryLabel: selectedCategoryLabel,
+        visibility,
+        createdAt: new Date().toISOString(),
+        likedBy: [],
+        likes: 0,
         src: resizedDataUrl,
       };
     }),
   );
 
   pins = [...newPins, ...pins];
-  savePins();
+  await savePins();
+  if (visibility === "public") {
+    await loadPublicPins();
+  }
   activeFilter = "all";
   setActiveFilter("all");
   renderPins();
@@ -767,9 +977,11 @@ authTabs.forEach((button) => {
       authMode === "signup"
         ? "Create your private photo board."
         : "Open your saved photo world.";
-    authSubmitButton.textContent = authMode === "signup" ? "Create Pinfolio" : "Unlock Pinfolio";
-    authMessage.classList.remove("error");
+    authSubmitLabel.textContent = authMode === "signup" ? "Create Pinfolio" : "Unlock Pinfolio";
+    authMessage.classList.remove("error", "success");
     authMessage.textContent = "Privacy and encryption protocol";
+    setAuthFieldState(userNameInput, false);
+    setAuthFieldState(passwordInput, false);
   });
 });
 
@@ -782,6 +994,16 @@ togglePassword.addEventListener("click", () => {
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await loginUser(userNameInput.value, passwordInput.value);
+});
+
+[userNameInput, passwordInput].forEach((field) => {
+  field.addEventListener("input", () => {
+    setAuthFieldState(field, false);
+    if (authMessage.classList.contains("error")) {
+      authMessage.classList.remove("error");
+      authMessage.textContent = "Privacy and encryption protocol";
+    }
+  });
 });
 
 feedbackForm.addEventListener("submit", async (event) => {
@@ -856,6 +1078,19 @@ filterRow.addEventListener("click", (event) => {
   renderPins();
 });
 
+document.querySelector(".board-tabs").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-board-mode]");
+  if (!button) return;
+
+  boardMode = button.dataset.boardMode || "mine";
+  activeFilter = "all";
+  if (boardMode === "public") {
+    await loadPublicPins();
+  }
+  syncCategoryUi();
+  renderPins();
+});
+
 addCategoryButton.addEventListener("click", addCategory);
 
 newCategoryInput.addEventListener("keydown", (event) => {
@@ -873,6 +1108,8 @@ categoryList.addEventListener("click", (event) => {
 });
 
 shuffleButton.addEventListener("click", () => {
+  if (boardMode === "public") return;
+
   pins = pins
     .map((pin) => ({ pin, sort: Math.random() }))
     .sort((a, b) => a.sort - b.sort)
@@ -935,6 +1172,13 @@ async function initApp() {
   syncGalleryEffectsUi();
   syncCategoryUi();
   renderPins();
+
+  if (isFilePreview) {
+    setAuthOpen(true);
+    setAuthMessage("Open http://localhost:3000/ to use login and signup.", "error");
+    authSubmitButton.disabled = true;
+    return;
+  }
 
   if (sessionStorage.getItem(authTokenStorageKey)) {
     try {

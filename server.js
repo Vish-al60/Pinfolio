@@ -262,6 +262,142 @@ function getUserFromRequest(req, db) {
   return { token, user, userId: session.userId };
 }
 
+async function getAuthenticatedUser(req, db) {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return null;
+
+  if (usingSupabase()) {
+    const session = await supabaseGetSession(token);
+    if (!session) return null;
+
+    const user = await supabaseGetUserByUserId(session.user_id);
+    if (!user) return null;
+
+    await supabaseUpdateLastUsed(token);
+    return { token, user, userId: user.user_id };
+  }
+
+  return getUserFromRequest(req, db);
+}
+
+function getPinLikes(pin) {
+  return Array.isArray(pin.likedBy) ? pin.likedBy.length : Number(pin.likes || 0);
+}
+
+function toPublicPin(pin, owner, currentUserId) {
+  const likedBy = Array.isArray(pin.likedBy) ? pin.likedBy : [];
+  return {
+    id: pin.id,
+    title: pin.title || "Public pin",
+    subtitle: pin.subtitle || "",
+    category: pin.category || "public",
+    categoryLabel: pin.categoryLabel || pin.category || "Public",
+    src: pin.src,
+    owner: owner.username,
+    ownerId: owner.userId,
+    createdAt: pin.createdAt || "",
+    likes: getPinLikes(pin),
+    liked: likedBy.includes(currentUserId),
+  };
+}
+
+function collectPublicPinsFromRows(rows, currentUserId) {
+  return rows
+    .flatMap((row) => {
+      const pins = Array.isArray(row.data?.pins) ? row.data.pins : [];
+      const owner = {
+        username: row.username,
+        userId: row.user_id || row.userId,
+      };
+
+      return pins
+        .filter((pin) => pin?.id && pin?.src && pin.visibility === "public")
+        .map((pin) => toPublicPin(pin, owner, currentUserId));
+    })
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+async function getPublicPins(currentUserId, db) {
+  if (usingSupabase()) {
+    const rows = await supabaseRequest(`/${TABLES.users}?select=user_id,username,data`, {
+      method: "GET",
+      headers: { Prefer: "return=representation" },
+    });
+    return collectPublicPinsFromRows(rows || [], currentUserId);
+  }
+
+  const rows = Object.entries(db.users).map(([userId, user]) => ({
+    userId,
+    username: user.username,
+    data: user.data || {},
+  }));
+  return collectPublicPinsFromRows(rows, currentUserId);
+}
+
+async function togglePublicPinLike(pinId, currentUserId, db) {
+  if (usingSupabase()) {
+    const rows = await supabaseRequest(`/${TABLES.users}?select=user_id,username,data`, {
+      method: "GET",
+      headers: { Prefer: "return=representation" },
+    });
+    const owner = (rows || []).find((row) =>
+      Array.isArray(row.data?.pins) &&
+      row.data.pins.some((pin) => pin?.id === pinId && pin.visibility === "public"),
+    );
+
+    if (!owner) return null;
+
+    const nextPins = owner.data.pins.map((pin) => {
+      if (pin.id !== pinId) return pin;
+      const likedBy = new Set(Array.isArray(pin.likedBy) ? pin.likedBy : []);
+      if (likedBy.has(currentUserId)) {
+        likedBy.delete(currentUserId);
+      } else {
+        likedBy.add(currentUserId);
+      }
+      return { ...pin, likedBy: [...likedBy], likes: likedBy.size };
+    });
+
+    const nextData = { ...(owner.data || {}), pins: nextPins };
+    await supabaseRequest(`/${TABLES.users}?user_id=eq.${encodeURIComponent(owner.user_id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        data: nextData,
+        updated_at: new Date().toISOString(),
+      }),
+    });
+
+    const updatedPin = nextPins.find((pin) => pin.id === pinId);
+    const likedBy = Array.isArray(updatedPin.likedBy) ? updatedPin.likedBy : [];
+    return { pinId, likes: likedBy.length, liked: likedBy.includes(currentUserId) };
+  }
+
+  const ownerEntry = Object.entries(db.users).find(([, user]) =>
+    Array.isArray(user.data?.pins) &&
+    user.data.pins.some((pin) => pin?.id === pinId && pin.visibility === "public"),
+  );
+
+  if (!ownerEntry) return null;
+
+  const [, owner] = ownerEntry;
+  owner.data.pins = owner.data.pins.map((pin) => {
+    if (pin.id !== pinId) return pin;
+    const likedBy = new Set(Array.isArray(pin.likedBy) ? pin.likedBy : []);
+    if (likedBy.has(currentUserId)) {
+      likedBy.delete(currentUserId);
+    } else {
+      likedBy.add(currentUserId);
+    }
+    return { ...pin, likedBy: [...likedBy], likes: likedBy.size };
+  });
+
+  writeDb(db);
+  const updatedPin = owner.data.pins.find((pin) => pin.id === pinId);
+  const likedBy = Array.isArray(updatedPin.likedBy) ? updatedPin.likedBy : [];
+  return { pinId, likes: likedBy.length, liked: likedBy.includes(currentUserId) };
+}
+
 async function sendFeedbackEmail({ name, email, review }) {
   if (!RESEND_API_KEY) {
     throw new Error("Feedback email is not configured. Add RESEND_API_KEY in deployment.");
@@ -312,14 +448,18 @@ async function handleApi(req, res) {
       const cleanName = normalizeUserName(username);
       const userId = userIdFromName(cleanName);
 
-      if (!cleanName || String(password || "").length < 4) {
-        return sendJson(res, 400, { error: "Username and a 4+ character password are required." });
+      if (!cleanName) {
+        return sendJson(res, 400, { error: "Please enter a username." });
+      }
+
+      if (String(password || "").length < 4) {
+        return sendJson(res, 400, { error: "Password must be at least 4 characters." });
       }
 
       if (usingSupabase()) {
         const existing = await supabaseGetUserByUserId(userId);
         if (existing) {
-          return sendJson(res, 409, { error: "Username already exists. Use sign in." });
+          return sendJson(res, 409, { error: "This username already exists. Use Sign in instead." });
         }
 
         const salt = crypto.randomBytes(16).toString("hex");
@@ -340,7 +480,7 @@ async function handleApi(req, res) {
       }
 
       if (db.users[userId]) {
-        return sendJson(res, 409, { error: "Username already exists. Use sign in." });
+        return sendJson(res, 409, { error: "This username already exists. Use Sign in instead." });
       }
 
       const salt = crypto.randomBytes(16).toString("hex");
@@ -360,14 +500,22 @@ async function handleApi(req, res) {
       const cleanName = normalizeUserName(username);
       const userId = userIdFromName(cleanName);
 
+      if (!cleanName) {
+        return sendJson(res, 400, { error: "Please enter your username." });
+      }
+
+      if (!password) {
+        return sendJson(res, 400, { error: "Please enter your password." });
+      }
+
       if (usingSupabase()) {
         const user = await supabaseGetUserByUserId(userId);
         if (!user) {
-          return sendJson(res, 404, { error: "Account not found. Click Register to create one." });
+          return sendJson(res, 404, { error: "Username not found. Check spelling or Register first." });
         }
 
         if (hashPassword(String(password || ""), user.salt) !== user.password_hash) {
-          return sendJson(res, 401, { error: "Wrong password." });
+          return sendJson(res, 401, { error: "Password is wrong for this username." });
         }
 
         const token = await supabaseCreateSession(user.user_id);
@@ -377,11 +525,11 @@ async function handleApi(req, res) {
       const user = db.users[userId];
 
       if (!user) {
-        return sendJson(res, 404, { error: "Account not found. Click Register to create one." });
+        return sendJson(res, 404, { error: "Username not found. Check spelling or Register first." });
       }
 
       if (hashPassword(String(password || ""), user.salt) !== user.passwordHash) {
-        return sendJson(res, 401, { error: "Wrong password." });
+        return sendJson(res, 401, { error: "Password is wrong for this username." });
       }
 
       const token = createSession(db, userId);
@@ -423,6 +571,27 @@ async function handleApi(req, res) {
 
       await sendFeedbackEmail({ name: cleanName, email: cleanEmail, review: cleanReview });
       return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method === "GET" && req.url === "/api/public-pins") {
+      const session = await getAuthenticatedUser(req, db);
+      if (!session) return sendJson(res, 401, { error: "Please sign in first." });
+
+      const publicPins = await getPublicPins(session.userId, db);
+      return sendJson(res, 200, { pins: publicPins });
+    }
+
+    if (req.method === "POST" && req.url === "/api/public-pins/like") {
+      const session = await getAuthenticatedUser(req, db);
+      if (!session) return sendJson(res, 401, { error: "Please sign in first." });
+
+      const { pinId } = await readBody(req);
+      if (!pinId) return sendJson(res, 400, { error: "Pin is required." });
+
+      const result = await togglePublicPinLike(String(pinId), session.userId, db);
+      if (!result) return sendJson(res, 404, { error: "Public pin not found." });
+
+      return sendJson(res, 200, result);
     }
 
     if (req.url === "/api/profile") {
